@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A ninety-second living wall painting after Goya's Saturn Devouring His Son.">
+<title>Saturno</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap">
+<style>
+/* One dark room: a living wall painting on a full-bleed canvas, one line of text at a time. */
+:root{
+  color-scheme: dark;
+  --void:#060504;
+  --bone:#cdbf9f;
+  --ash:#81755f;
+  --rust:#8a2a1c;
+  --serif:"IM Fell English","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --caps:"IM Fell English SC","IM Fell English","Palatino Linotype",Georgia,serif;
+}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--void);color:var(--bone);overflow:hidden}
+body{font-family:var(--serif);-webkit-font-smoothing:antialiased}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;background:var(--void)}
+.line{position:fixed;left:16px;right:16px;margin:0 auto;max-width:32em;text-align:center;pointer-events:none;opacity:0;
+  text-wrap:balance;text-shadow:0 0 1.4em #000,0 0 .35em #000}
+#line{bottom:calc(11vh + env(safe-area-inset-bottom,0px));font-style:italic;font-size:clamp(19px,2.3vw,30px);line-height:1.35}
+#count{bottom:calc(5vh + env(safe-area-inset-bottom,0px));font-family:var(--caps);font-size:clamp(13px,1.3vw,16px);
+  letter-spacing:.12em;color:var(--ash);font-variant-numeric:tabular-nums}
+#gate{position:fixed;inset:0;display:grid;align-items:end;justify-items:center;padding:0 16px calc(8vh + env(safe-area-inset-bottom,0px));
+  transition:opacity 1.6s ease}
+#gate.leaving{opacity:0}
+.gate-inner{display:grid;gap:18px;justify-items:center;text-align:center;max-width:30em}
+.after{font-family:var(--caps);letter-spacing:.24em;font-size:13px;color:var(--ash);margin:0}
+h1{font-family:var(--caps);font-weight:400;font-size:clamp(46px,7.5vw,92px);letter-spacing:.2em;padding-left:.2em;margin:0;line-height:.95;color:var(--bone)}
+.warn{font-style:italic;color:var(--ash);font-size:clamp(15px,1.5vw,18px);line-height:1.55;margin:0}
+button{font:inherit;font-family:var(--caps);font-size:15px;letter-spacing:.26em;color:var(--bone);background:transparent;cursor:pointer;
+  border:1px solid rgba(205,191,159,.35);padding:.8em 2.1em .75em 2.36em;transition:border-color .5s,color .5s,background-color .5s}
+button:hover{border-color:var(--rust);background-color:rgba(138,42,28,.14);color:#efe2c4}
+button:focus-visible{outline:1px solid var(--bone);outline-offset:5px}
+#again{position:fixed;top:calc(16px + env(safe-area-inset-top,0px));right:16px;font-size:12px;padding:.55em 1.3em .5em 1.5em;opacity:.55}
+#again:hover{opacity:1}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="A slowly moving painting of Saturn devouring his son"></canvas>
+<p id="line" class="line" aria-live="polite"></p>
+<p id="count" class="line"></p>
+<button id="again" type="button" hidden>Again</button>
+
+<div id="gate">
+  <div class="gate-inner">
+    <p class="after">after goya &middot; 1819&ndash;1823</p>
+    <h1>Saturno</h1>
+    <p class="warn">Headphones. Lights off. About ninety seconds.</p>
+    <button id="begin" type="button">Begin</button>
+  </div>
+</div>
+
+<script>
+(() => {
+const qs = new URLSearchParams(location.search);
+const canvas = document.getElementById('c');
+const lineEl = document.getElementById('line');
+const countEl = document.getElementById('count');
+const gate = document.getElementById('gate');
+const againBtn = document.getElementById('again');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const gl = canvas.getContext('webgl', {antialias:false, alpha:false, depth:false, stencil:false, powerPreference:'high-performance'});
+if (!gl) { lineEl.textContent = 'This painting needs WebGL, and this browser has it turned off.'; lineEl.style.opacity = 1; return; }
+
+/* ------------------------------------------------------------------ */
+/*  The painting. Every form is a soft signed-distance shape, lit by   */
+/*  one candle from the upper left, then cracked like old plaster.     */
+/* ------------------------------------------------------------------ */
+const VS = `attribute vec2 a; void main(){ gl_Position = vec4(a,0.,1.); }`;
+const FS = `
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime, uFade;
+uniform vec3 uCam;
+uniform float uLight, uJaw, uPupil, uEyeOpen, uEyeGlow, uSon, uReach, uBlood, uScare, uBreath, uBite;
+uniform vec2 uLook;
+#define PI 3.14159265
+
+float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*.1031); p3 += dot(p3, p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x), mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x), u.y); }
+const mat2 M2 = mat2(1.6,1.2,-1.2,1.6);
+float fbm(vec2 p){ float v=0., a=.5; for(int i=0;i<5;i++){ v+=a*noise(p); p=M2*p; a*=.5; } return v; }
+float fbm3(vec2 p){ float v=0., a=.5; for(int i=0;i<3;i++){ v+=a*noise(p); p=M2*p; a*=.5; } return v; }
+
+float sdE(vec2 p, vec2 c, vec2 r){ p-=c; float k0=length(p/r); float k1=length(p/(r*r)); return k0*(k0-1.)/max(k1,1e-5); }
+float sdT(vec2 p, vec2 a, vec2 b, float ra, float rb){
+  vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/(dot(ba,ba)+1e-8),0.,1.);
+  return length(pa-ba*h)-mix(ra,rb,h); }
+float smin(float a, float b, float k){ float h=clamp(.5+.5*(b-a)/k,0.,1.); return mix(b,a,h)-k*h*(1.-h); }
+float msk(float d){ return smoothstep(.0025,-.0025,d); }
+
+struct S { float h; vec3 c; float sp; float gl; float ao; };
+
+void lay(inout S s, float d, float base, float r, vec3 col, float sp){
+  float m = msk(d);
+  float x = clamp(-d/r, 0., 1.);
+  float h = base + r*sqrt(x*(2.-x));
+  s.ao *= 1. - .6*(1.-smoothstep(0., .03, d))*(1.-m);
+  s.ao = mix(s.ao, 1., m);
+  s.h = mix(s.h, h, m);
+  s.c = mix(s.c, col, m);
+  s.sp = mix(s.sp, sp, m);
+  s.gl *= 1.-m;
+}
+
+// a long, bony hand. sd=+1 sits on the viewer's left. rc blends grip -> reaching.
+float hand(vec2 q, vec2 P, float sd, float k, float rc, float sq){
+  float d = sdE(q, P, vec2(.027,.032)*k);
+  for(int i=0;i<4;i++){
+    float fi = float(i);
+    vec2 bG = P + vec2(sd*.017, .022 - fi*.0155)*k;
+    float aG = (sd>0. ? 0. : PI) - sd*(.1 + fi*.06);
+    vec2 bR = P + vec2(sd*(.014 - fi*.0095), .027 + .005*(1.5-abs(fi-1.5)))*k;
+    float aR = PI*.5 - sd*(.34 - fi*.27);
+    vec2 b = mix(bG, bR, rc);
+    float a = mix(aG, aR, rc);
+    float l1 = (.04 + .004*sin(fi*2.3))*k*(i==3 ? .8 : 1.);
+    float l2 = l1*.84;
+    float cu = mix(-sd*(.5 + sq*.35), (PI*.5 - aR)*.9, rc);
+    vec2 j = b + l1*vec2(cos(a), sin(a));
+    vec2 t = j + l2*vec2(cos(a+cu), sin(a+cu));
+    d = smin(d, sdT(q, b, j, .0105*k, .0088*k), .007);
+    d = smin(d, sdT(q, j, t, .0088*k, .0052*k), .003);
+  }
+  vec2 tb = mix(P + vec2(sd*.004, .026)*k, P + vec2(sd*.022, -.004)*k, rc);
+  float ta = mix(sd>0. ? .75 : PI-.75, sd>0. ? .2 : PI-.2, rc);
+  vec2 tj = tb + .029*k*vec2(cos(ta), sin(ta));
+  float tc = mix(-sd*.55, sd*.35, rc);
+  vec2 tt = tj + .023*k*vec2(cos(ta+tc), sin(ta+tc));
+  d = smin(d, sdT(q, tb, tj, .012*k, .0092*k), .008);
+  d = smin(d, sdT(q, tj, tt, .0092*k, .006*k), .003);
+  return d;
+}
+
+void eye(inout S s, vec2 q, vec2 e, float r, float full){
+  float d = max(length(q-e) - r, (q.y - e.y) - r*(2.*uEyeOpen - 1.));
+  float rr = length(q-e)/r;
+  vec3 wc = mix(vec3(.86,.82,.7), vec3(.6,.32,.26), smoothstep(.55,1.05,rr)*.35);
+  if(full > .5){
+    float vn = 1. - abs(2.*noise(q*260.) - 1.);
+    wc = mix(wc, vec3(.5,.08,.06), pow(vn,12.)*smoothstep(.4,.95,rr)*.5);
+  }
+  vec2 pc = e + uLook*r*.5;
+  float di = length(q-pc);
+  float ir = r*.28, pr = r*.19*uPupil;
+  vec3 irc = vec3(.13,.08,.04);
+  if(full > .5) irc *= .55 + .8*noise(normalize(q-pc+1e-5)*13. + di*300.);
+  float mi = smoothstep(ir+.0012, ir-.0012, di);
+  wc = mix(wc, irc, mi);
+  wc = mix(wc, vec3(.008,.006,.005), smoothstep(pr+.001, pr-.001, di));
+  lay(s, d, .1, r*.9, wc, .9);
+  s.gl = max(s.gl, msk(d)*(1. - mi));
+  s.c = mix(s.c, vec3(.2,.05,.035), smoothstep(.006,.0,abs(d+.0015))*.75);
+}
+
+S scene(vec2 p, float full){
+  S s; s.h = 0.; s.sp = 0.; s.gl = 0.; s.ao = 1.; s.c = vec3(.03,.022,.015);
+  if(full > .5){ float bn = fbm3(p*3.); s.c = mix(vec3(.025,.018,.012), vec3(.11,.075,.042), bn*bn*1.5); }
+
+  vec2 w = vec2(noise(p*15.+3.1), noise(p*15.+8.7)) - .5;
+  w += .45*(vec2(noise(p*52.+1.7), noise(p*52.+5.2)) - .5);
+  vec2 q = p + w*.011;
+  q.y -= uBreath*.0045;
+
+  vec3 sat = vec3(.56,.45,.31);
+  vec3 bl = vec3(.33,.022,.014);
+  float var = full > .5 ? fbm3(q*11.) : .5;
+  vec3 satV = mix(sat*vec3(.8,.86,.76), sat*vec3(1.08,1.,.9), var);
+
+  // torso, shoulders, neck
+  float dt = sdE(q, vec2(-.005,-.01), vec2(.165,.22));
+  dt = smin(dt, sdT(q, vec2(-.2,.125), vec2(.19,.135), .052, .048), .07);
+  dt = smin(dt, sdT(q, vec2(-.014,.18), vec2(-.008,.07), .042, .055), .03);
+  vec3 tc = vec3(.2,.155,.105)*mix(.75,1.2,var);
+  if(full > .5){
+    float rib = sin((q.y + .012*sin(q.x*16.))*88.);
+    tc *= 1. - .3*smoothstep(.2,1.,rib)*smoothstep(.04,.13,abs(q.x))*smoothstep(.2,.0,q.y);
+  }
+  lay(s, dt, 0., .1, tc, 0.);
+
+  // thighs and knees, crouched
+  float dk = sdE(q, vec2(-.25,-.33), vec2(.085,.075));
+  dk = smin(dk, sdT(q, vec2(-.25,-.33), vec2(-.12,-.13), .07, .09), .03);
+  dk = smin(dk, sdT(q, vec2(-.265,-.37), vec2(-.22,-.64), .058, .045), .03);
+  float dk2 = sdE(q, vec2(.235,-.40), vec2(.075,.07));
+  dk2 = smin(dk2, sdT(q, vec2(.235,-.40), vec2(.12,-.17), .065, .085), .03);
+  dk2 = smin(dk2, sdT(q, vec2(.25,-.43), vec2(.215,-.68), .052, .042), .03);
+  lay(s, min(dk,dk2), .02, .085, satV*.85, 0.);
+
+  // arms
+  float hk = mix(1., 1.25, uReach);
+  vec2 Pl = mix(vec2(-.118,-.04), vec2(-.15,.03), uReach);
+  vec2 Pr = mix(vec2(.118,-.02), vec2(.15,.045), uReach);
+  vec2 el = mix(vec2(-.285,-.07), vec2(-.3,-.1), uReach);
+  vec2 er = mix(vec2(.272,-.075), vec2(.29,-.085), uReach);
+  vec2 wl = Pl + mix(vec2(-.024,-.008), vec2(0.,-.032), uReach)*hk;
+  vec2 wr = Pr + mix(vec2(.024,-.008), vec2(0.,-.032), uReach)*hk;
+  float da = smin(sdT(q, vec2(-.2,.12), el, .034, .026), sdT(q, el, wl, .026, .02), .012);
+  float db = smin(sdT(q, vec2(.19,.13), er, .033, .025), sdT(q, er, wr, .025, .019), .012);
+  lay(s, min(da,db), .03, .034, satV*.92, 0.);
+
+  // hair, wild and grey
+  vec2 hv = q - vec2(-.02,.27); float hr = length(hv); vec2 hd = hv/max(hr,1e-4);
+  float sp1 = fbm3(hd*3.2 + hr*1.5) + .35*(noise(hd*16. + hr*3.) - .5);
+  float dh = sdE(q, vec2(-.05,.295), vec2(.15,.135)) - .06*(sp1-.4);
+  dh = smin(dh, sdT(q, vec2(-.11,.27), vec2(-.25,.08), .07, .012) - .035*(sp1-.45), .05);
+  dh = smin(dh, sdT(q, vec2(.05,.3), vec2(.125,.16), .05, .008) - .025*(sp1-.45), .04);
+  vec3 hcol = vec3(.5,.48,.44);
+  if(full > .5){
+    float st = noise(hd*42. + vec2(hr*4.) + w*3.)*.6 + noise(hd*115. + vec2(hr*9.))*.4;
+    hcol *= (.12 + 1.3*st*st*st)*(.6 + .6*fbm3(q*9.));
+  }
+  lay(s, dh, .02, .045, hcol, .05);
+
+  // head and jaw
+  float jw = uJaw;
+  vec2 mc = vec2(-.01, .193 - .02*jw);
+  vec2 mr = vec2(.038 + .009*jw, .009 + .03*jw);
+  float dhd = sdE(q, vec2(-.012,.262), vec2(.066,.088));
+  dhd = smin(dhd, sdE(q, vec2(-.011,.212), vec2(.06,.05)), .025);
+  dhd = smin(dhd, sdE(q, vec2(-.009, .17 - .032*jw), vec2(.045, .036 + .011*jw)), .025);
+  float hol = exp(-dot(q-vec2(-.058,.215), q-vec2(-.058,.215))/.0006) + exp(-dot(q-vec2(.038,.22), q-vec2(.038,.22))/.0005)
+            + .8*exp(-dot(q-vec2(-.072,.3), q-vec2(-.072,.3))/.0005) + .8*exp(-dot(q-vec2(.05,.305), q-vec2(.05,.305))/.0005);
+  vec3 fc = satV*(1. - .35*hol);
+  lay(s, dhd, .05, .075, fc, .06);
+  float mh = msk(dhd);
+  vec2 e1 = vec2(-.047,.283), e2 = vec2(.029,.289);
+  float so = exp(-dot(q-e1,q-e1)/.0011) + exp(-dot(q-e2,q-e2)/.001);
+  float brow = exp(-pow((q.y-.318)/.012, 2.)) * smoothstep(.085,.0,abs(q.x+.01));
+  s.h += mh*(-.03*so + .012*brow - .02*hol);
+  s.c *= 1. - mh*.45*so;
+  float dn = sdT(q, vec2(-.012,.285), vec2(-.007,.229), .008, .015);
+  s.h += msk(dn)*.012*sqrt(clamp(-dn/.012,0.,1.));
+  float nos = min(length(q-vec2(-.019,.226)), length(q-vec2(.004,.226))) - .0045;
+  s.c *= 1. - .65*msk(nos)*mh;
+
+  float dhf = sdE(q, vec2(-.016,.375), vec2(.105,.07)) - .03*(sp1-.4);
+  dhf = min(dhf, sdT(q, vec2(-.07,.33), vec2(-.09,.2), .016, .004) - .01*(sp1-.4));
+  dhf = min(dhf, sdT(q, vec2(.048,.335), vec2(.068,.22), .013, .004) - .01*(sp1-.4));
+  lay(s, dhf, .1, .03, hcol, .05);
+
+  // eyes: too wide, too white
+  float bulge = mix(1., 1.2, uScare);
+  eye(s, q, e1, .023*bulge, full);
+  eye(s, q, e2, .021*bulge, full);
+
+  // mouth
+  float dm = sdE(q, mc, mr);
+  float mm = msk(dm);
+  float my = (q.y - mc.y)/mr.y;
+  lay(s, dm, .03, .02, mix(vec3(.025,.005,.004), vec3(.2,.04,.03), smoothstep(-.1,-.85,my)*.8*(1. - smoothstep(.006,.03,-dm))), .3);
+  s.c = mix(s.c, vec3(.3,.08,.05), smoothstep(.006,.0,abs(dm))*mh*.6);
+  float tx = (q.x + 1.)*115.;
+  float tcl = floor(tx), tf = fract(tx);
+  float tl = hash(vec2(tcl, 7.)), tu = hash(vec2(tcl, 3.));
+  float cols = step(.14, tf)*step(tf, .86);
+  float lowT = mm*step(my, 0.)*step(-dm, .004 + .004*tl)*cols*step(.4, tl);
+  vec3 tooth = vec3(.5,.41,.26);
+  s.c = mix(s.c, tooth*(.7+.4*tl)*mix(1.,.45,smoothstep(.0,.007,-dm)), lowT); s.h = mix(s.h, .1, lowT); s.sp = mix(s.sp, .5, lowT);
+  // blood on lips and chin
+  if(full > .5){
+    vec2 sm = (q - vec2(-.01,.165))/vec2(.055,.05);
+    float smear = smoothstep(.45,.75, fbm3(q*38.)) * exp(-dot(sm,sm)) * mh * (1.-mm);
+    s.c = mix(s.c, bl, smear*(.55 + .45*uBlood)); s.sp = mix(s.sp, .7, smear);
+  }
+  float cd = 1e3;
+  for(int i=0;i<3;i++){
+    float fi = float(i);
+    vec2 o = vec2(mc.x - .022 + fi*.021 + .006*hash(vec2(fi,2.)), mc.y - mr.y*.8);
+    float len = (.02 + .035*hash(vec2(fi,5.)))*clamp(uBlood*1.4 - fi*.15, 0., 1.);
+    vec2 qq = q; qq.x -= .002*sin(q.y*80. + fi*2.);
+    float rk = smoothstep(.0,.015,len);
+    cd = min(cd, min(sdT(qq, o, o - vec2(0.,len), .0028*rk, .002*rk), length(qq - o + vec2(0.,len)) - .0036*step(.015,len)));
+  }
+  float mcd = msk(max(cd, dhd));
+  s.c = mix(s.c, bl, mcd*.9); s.sp = mix(s.sp, .15, mcd);
+
+  // saturn's hands (computed early so the son can bruise under them)
+  float dH = min(hand(q, Pl, 1., hk, uReach, uBite), hand(q, Pr, -1., hk, uReach, uBite));
+
+  // the son
+  if(uSon > .5){
+    vec2 b = q - vec2(0., uBite*.0035);
+    float ds = sdT(b, vec2(.004,.1), vec2(-.002,-.125), .049, .04);
+    ds = smin(ds, sdE(b, vec2(.002,.108), vec2(.064,.03)), .03);
+    // his neck disappears into the mouth
+    ds = smin(ds, sdT(b, vec2(0.,.12), vec2(-.006, mc.y + mr.y*.3), .03, .024), .025);
+    ds = smin(ds, sdE(b, vec2(-.002,-.18), vec2(.055,.05)), .035);
+    float dl = smin(sdT(b, vec2(-.024,-.2), vec2(-.078,-.355), .033, .024), sdT(b, vec2(-.078,-.355), vec2(-.058,-.52), .023, .015), .008);
+    float dr = smin(sdT(b, vec2(.026,-.2), vec2(.052,-.37), .032, .023), sdT(b, vec2(.052,-.37), vec2(.03,-.535), .022, .014), .008);
+    ds = smin(ds, min(dl,dr), .012);
+    vec3 sc = vec3(.72,.58,.45);
+    if(full > .5) sc *= mix(vec3(.82,.8,.86), vec3(1.08,1.,.92), fbm3(b*9.)) * (.9 + .16*noise(b*40.));
+    sc = mix(sc, vec3(.45,.15,.13), (1.-smoothstep(.0,.02,dH))*.6);
+    lay(s, ds, .07, .05, sc, .04);
+    float ms = msk(ds);
+    float spine = exp(-pow((b.x - .004 + .01*(b.y-.088))/.004, 2.)) * smoothstep(.1,.05,b.y) * smoothstep(-.14,-.08,b.y);
+    float cleft = exp(-pow((b.x+.002)/.0035, 2.)) * smoothstep(-.14,-.17,b.y) * smoothstep(-.24,-.2,b.y);
+    s.h -= ms*(.006*spine + .014*cleft);
+    // blood running down the back
+    float dd = 1e3;
+    for(int i=0;i<7;i++){
+      float fi = float(i);
+      float hx = hash(vec2(fi,3.7)), hl = hash(vec2(fi,9.1)), hdl = hash(vec2(fi,1.3));
+      vec2 o = vec2(-.03 + hx*.06, .15 - hdl*.035);
+      float len = (.05 + hl*.19)*clamp(uBlood*1.5 - hdl*.5, 0., 1.);
+      vec2 qq = b; qq.x -= .0025*sin(b.y*70. + fi*3.);
+      float rk = smoothstep(.0,.02,len);
+      dd = min(dd, min(sdT(qq, o, o - vec2(0.,len), .0026*rk, .0018*rk), length(qq - o + vec2(0.,len)) - .0034*step(.02,len)));
+    }
+    float mdd = msk(max(dd, ds - .001));
+    s.c = mix(s.c, bl*(.7 + .5*noise(b*90.)), mdd*.9); s.sp = mix(s.sp, .12, mdd);
+    // the arm he has left, hanging
+    float dA = smin(sdT(b, vec2(.054,.104), vec2(.072,.0), .019, .015), sdT(b, vec2(.072,.0), vec2(.064,-.1), .015, .011), .006);
+    dA = smin(dA, sdE(b, vec2(.062,-.112), vec2(.011,.017)), .006);
+    lay(s, dA, .1, .018, sc*.92, .12);
+    // blood where the neck meets the teeth
+    s.c = mix(s.c, bl*(.55 + .6*noise(b*70.)), msk(ds)*smoothstep(.12,.17,b.y)*smoothstep(.35,.6,fbm3(b*vec2(25.,6.)) + .25*smoothstep(.15,.18,b.y)));
+  }
+
+  // upper teeth close over whatever is in the mouth
+  float upT = mm*step(0., my)*step(-dm, .005 + .006*tu)*cols*step(.28, tu);
+  s.c = mix(s.c, tooth*(.75+.35*tu)*mix(1.,.45,smoothstep(.0,.008,-dm)), upT); s.h = mix(s.h, .12, upT); s.sp = mix(s.sp, .5, upT);
+  s.c = mix(s.c, vec3(.03,.005,.004), mm*smoothstep(.0,.8,my)*(1.-upT)*.5*uSon);
+
+  // hands, in front of everything
+  vec3 hcl = satV*1.12;
+  if(full > .5){
+    float bm = smoothstep(.42,.62, fbm3(q*30.)) * (.35 + .65*uReach);
+    hcl = mix(hcl, bl*1.2, bm*.85);
+  }
+  lay(s, dH, .13, .02, hcl, .08 + .3*uReach);
+  return s;
+}
+
+float crack(vec2 x){
+  vec2 n = floor(x), f = fract(x), mr = vec2(0.), mg = vec2(0.); float md = 8.;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){
+    vec2 g = vec2(float(i),float(j)); vec2 o = vec2(hash(n+g), hash(n+g+19.7));
+    vec2 r = g + o - f; float d = dot(r,r);
+    if(d < md){ md = d; mr = r; mg = g; }
+  }
+  md = 8.;
+  for(int j=-2;j<=2;j++) for(int i=-2;i<=2;i++){
+    vec2 g = mg + vec2(float(i),float(j)); vec2 o = vec2(hash(n+g), hash(n+g+19.7));
+    vec2 r = g + o - f;
+    if(dot(mr-r,mr-r) > 1e-5) md = min(md, dot(.5*(mr+r), normalize(r-mr)));
+  }
+  return md;
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - .5*uRes)/uRes.y;
+  vec2 p = uv/uCam.z + uCam.xy;
+  float e = 1.5/(uRes.y*uCam.z);
+  S s = scene(p, 1.);
+  float hx = scene(p + vec2(e,0.), 0.).h;
+  float hy = scene(p + vec2(0.,e), 0.).h;
+  vec3 n = vec3((s.h-hx)/e, (s.h-hy)/e, 1.);
+  // brush strokes in the relief: the light catches ridges of dragged paint
+  vec2 sd1 = vec2(dot(p,vec2(.78,.62))*26., dot(p,vec2(-.62,.78))*210.);
+  vec2 sd2 = vec2(dot(p,vec2(.2,.98))*30., dot(p,vec2(-.98,.2))*170.);
+  n.xy += .55*(vec2(noise(sd1), noise(sd2)) - .5) + .35*(vec2(noise(p*90.), noise(p*90.+3.3)) - .5);
+  n = normalize(n);
+  vec3 Ld = normalize(vec3(-.55,.55,.62));
+  float dif = max(dot(n,Ld), 0.);
+  vec2 lc = vec2(-.03,.16);
+  float fall = exp(-dot(p-lc,p-lc)/.075);
+  float flick = .86 + .14*noise(vec2(uTime*6.,.5)) + .05*noise(vec2(uTime*23.,1.5));
+  float I = uLight*flick*fall;
+  vec3 col = s.c*(.02 + 1.8*dif*I)*s.ao;
+  vec3 hv = normalize(Ld + vec3(0.,0.,1.));
+  col += s.sp*pow(max(dot(n,hv),0.), 40.)*I*vec3(1.,.93,.8)*.9;
+  col += s.gl*uEyeGlow*vec3(.5,.47,.4)*(.35 + .65*dif);
+  // plaster, brush, and two hundred years of cracks
+  float tex = fbm(p*30.);
+  col *= .76 + .48*tex;
+  col *= .88 + .24*noise(vec2(dot(p,vec2(.78,.62))*24., dot(p,vec2(-.62,.78))*240.));
+  vec2 cp = p*58. + .6*vec2(noise(p*14.), noise(p*14. + 4.));
+  float cz = smoothstep(.42, .62, fbm3(p*5. + 2.));
+  col *= 1. - .4*cz*(1. - smoothstep(.0, .022, crack(cp)))*smoothstep(.3, .7, noise(p*130.));
+  col = 1. - exp(-max(col, 0.)*1.3);
+  col = pow(col, vec3(1.15,1.18,1.28));
+  col *= .22 + .78*smoothstep(1.05, .2, length(uv*vec2(.8,1.)));
+  col = mix(col, col*vec3(1.35,.7,.62) + vec3(.045,0.,0.), uScare);
+  col += (hash(gl_FragCoord.xy + fract(uTime*7.)*317.) - .5)*.03;
+  gl_FragColor = vec4(max(col, 0.)*uFade, 1.);
+}`;
+
+function compile(type, src){
+  const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.bindAttribLocation(prog, 0, 'a');
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); return; }
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+const U = {};
+['uRes','uTime','uFade','uCam','uLight','uJaw','uPupil','uEyeOpen','uEyeGlow','uSon','uReach','uBlood','uScare','uBreath','uBite','uLook']
+  .forEach(n => U[n] = gl.getUniformLocation(prog, n));
+
+let budget = 900000, cssW = 1, cssH = 1;
+function resize(){
+  cssW = canvas.clientWidth || innerWidth; cssH = canvas.clientHeight || innerHeight;
+  const k = Math.min(devicePixelRatio || 1, Math.sqrt(budget/(cssW*cssH)));
+  canvas.width = Math.max(1, Math.round(cssW*k)); canvas.height = Math.max(1, Math.round(cssH*k));
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+addEventListener('resize', resize); resize();
+
+/* ------------------------------------------------------------------ */
+/*  Sound: a drone, a room, and things that are wet.                   */
+/* ------------------------------------------------------------------ */
+let A = null;
+function audioInit(){
+  if (A) return A;
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+  const ctx = new AC();
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -12; comp.knee.value = 6; comp.ratio.value = 10; comp.attack.value = .002; comp.release.value = .2;
+  const master = ctx.createGain(); master.gain.value = .95;
+  master.connect(comp); comp.connect(ctx.destination);
+  const len = ctx.sampleRate*2, nb = ctx.createBuffer(1, len, ctx.sampleRate), nd = nb.getChannelData(0);
+  for (let i = 0; i < len; i++) nd[i] = Math.random()*2 - 1;
+  const ir = ctx.createBuffer(2, ctx.sampleRate*3, ctx.sampleRate);
+  for (let c = 0; c < 2; c++){ const d = ir.getChannelData(c); for (let i = 0; i < d.length; i++){ const t = i/ctx.sampleRate; d[i] = (Math.random()*2-1)*Math.exp(-t*2.2)*Math.min(1, t/.01); } }
+  const verb = ctx.createConvolver(); verb.buffer = ir;
+  const wet = ctx.createGain(); wet.gain.value = .5; wet.connect(verb); verb.connect(master);
+  const dry = ctx.createGain(); dry.connect(master);
+  const droneG = ctx.createGain(); droneG.gain.value = 0;
+  const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = 150; dlp.Q.value = 7;
+  dlp.connect(droneG); droneG.connect(master); droneG.connect(wet);
+  [36.71, 38.89, 55.0, 77.78, 82.41].forEach((f, i) => {
+    const o = ctx.createOscillator(); o.type = i < 3 ? 'sawtooth' : 'triangle'; o.frequency.value = f; o.detune.value = (Math.random()-.5)*16;
+    const g = ctx.createGain(); g.gain.value = i < 3 ? .22 : .12; o.connect(g); g.connect(dlp); o.start();
+  });
+  const lfo = ctx.createOscillator(); lfo.frequency.value = .06; const lg = ctx.createGain(); lg.gain.value = 70; lfo.connect(lg); lg.connect(dlp.frequency); lfo.start();
+  const room = ctx.createBufferSource(); room.buffer = nb; room.loop = true;
+  const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 320;
+  const roomG = ctx.createGain(); roomG.gain.value = 0;
+  room.connect(rlp); rlp.connect(roomG); roomG.connect(master); room.start();
+  const glassG = ctx.createGain(); glassG.gain.value = 0; glassG.connect(master); glassG.connect(wet);
+  [1760, 1866].forEach(f => {
+    const o = ctx.createOscillator(); o.frequency.value = f;
+    const v = ctx.createOscillator(); v.frequency.value = .3 + Math.random()*.4; const vg = ctx.createGain(); vg.gain.value = 4;
+    v.connect(vg); vg.connect(o.frequency); v.start(); o.connect(glassG); o.start();
+  });
+  A = {ctx, master, dry, wet, droneG, roomG, glassG, nb};
+  return A;
+}
+function to(node, v, tc){ if (!A) return; const t = A.ctx.currentTime; node.gain.cancelScheduledValues(t); node.gain.setTargetAtTime(v, t, tc); }
+function env(g, t, peak, a, d){ g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(peak, t+a); g.gain.exponentialRampToValueAtTime(.0001, t+a+d); }
+function out(node, wetAmt){ node.connect(A.dry); if (wetAmt > 0){ const w = A.ctx.createGain(); w.gain.value = wetAmt; node.connect(w); w.connect(A.wet); } }
+function noiseAt(t, dur){ const s = A.ctx.createBufferSource(); s.buffer = A.nb; s.start(t, Math.random()*1.7, dur + .1); return s; }
+function squelch(t, f0, f1, dur, g){
+  const c = A.ctx, s = noiseAt(t, dur), bp = c.createBiquadFilter(), ga = c.createGain(), am = c.createOscillator(), amg = c.createGain(), vca = c.createGain();
+  bp.type = 'bandpass'; bp.Q.value = 5; bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f1, t+dur);
+  am.frequency.value = 28 + Math.random()*40; amg.gain.value = .7; vca.gain.value = .3;
+  am.connect(amg); amg.connect(vca.gain); am.start(t); am.stop(t + dur + .1);
+  env(ga, t, g, .01, dur);
+  s.connect(bp); bp.connect(vca); vca.connect(ga); out(ga, .25);
+}
+function click(t, f, g){
+  const c = A.ctx, s = noiseAt(t, .03), bp = c.createBiquadFilter(), ga = c.createGain();
+  bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = .9;
+  env(ga, t, g, .0008, .012 + Math.random()*.02);
+  s.connect(bp); bp.connect(ga); out(ga, .15);
+}
+function thud(t, f, g, dur){
+  const c = A.ctx, o = c.createOscillator(), ga = c.createGain();
+  o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f*.45, t+dur);
+  env(ga, t, g, .004, dur); o.connect(ga); out(ga, .1); o.start(t); o.stop(t + dur + .05);
+}
+function chewSound(k){
+  if (!A) return;
+  const t = A.ctx.currentTime + .01, crackIt = k > 1 || Math.random() < .2;
+  squelch(t, 700 + Math.random()*700, 220 + Math.random()*120, .22 + Math.random()*.1, 1.5*k);
+  squelch(t + .06 + Math.random()*.06, 420 + Math.random()*300, 160, .16, 1.0*k);
+  const n = 2 + Math.floor(Math.random()*5*k);
+  for (let i = 0; i < n; i++) click(t + Math.random()*.16, 1400 + Math.random()*3200, (.25 + Math.random()*.45)*k);
+  thud(t, 70 + Math.random()*20, .5*k, .16);
+  if (crackIt){ click(t + .04, 2400, 1.1*k); click(t + .052, 1800, .8*k); thud(t + .04, 140, .5*k, .09); }
+}
+function heartbeat(g){
+  if (!A) return; const t = A.ctx.currentTime + .01;
+  thud(t, 62, g, .16); thud(t, 124, g*.25, .08); thud(t + .25, 55, g*.75, .18); thud(t + .25, 110, g*.18, .08);
+}
+function breathPart(t, dur, g, f0, f1, att){
+  const c = A.ctx, s = noiseAt(t, dur), bp = c.createBiquadFilter(), lp = c.createBiquadFilter(), ga = c.createGain();
+  bp.type = 'bandpass'; bp.Q.value = 1.1; bp.frequency.setValueAtTime(f0, t); bp.frequency.linearRampToValueAtTime(f1, t+dur);
+  lp.type = 'lowpass'; lp.frequency.value = 1600;
+  ga.gain.setValueAtTime(.0001, t); ga.gain.linearRampToValueAtTime(g, t + dur*att); ga.gain.linearRampToValueAtTime(.0001, t+dur);
+  s.connect(bp); bp.connect(lp); lp.connect(ga); out(ga, .35);
+}
+function breathe(g){ if (!A) return; const t = A.ctx.currentTime + .01; breathPart(t, 1.5, g*.8, 300, 620, .7); breathPart(t + 1.65, 2.1, g, 560, 240, .25); }
+function scareSound(){
+  if (!A) return;
+  const c = A.ctx, t = c.currentTime + .005;
+  const o = c.createOscillator(), og = c.createGain();
+  o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(26, t + .9);
+  og.gain.setValueAtTime(1.4, t); og.gain.exponentialRampToValueAtTime(.0001, t + 1.6); o.connect(og); out(og, .4); o.start(t); o.stop(t + 1.7);
+  const s = noiseAt(t, 1.4), hp = c.createBiquadFilter(), ng = c.createGain(); hp.type = 'highpass'; hp.frequency.value = 200;
+  ng.gain.setValueAtTime(1.1, t); ng.gain.exponentialRampToValueAtTime(.0001, t + 1.2); s.connect(hp); hp.connect(ng); out(ng, .6);
+  const ws = c.createWaveShaper(), curve = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) curve[i] = Math.tanh((i/511.5 - 1)*6);
+  ws.curve = curve;
+  const sg = c.createGain(); sg.gain.setValueAtTime(.0001, t); sg.gain.linearRampToValueAtTime(.55, t + .02); sg.gain.exponentialRampToValueAtTime(.0001, t + 1.4);
+  ws.connect(sg); out(sg, .7);
+  [311, 330, 466, 698, 740, 1047, 1109].forEach(f => {
+    const x = c.createOscillator(); x.type = 'sawtooth'; x.frequency.setValueAtTime(f, t); x.frequency.exponentialRampToValueAtTime(f*1.12, t + 1.2);
+    const v = c.createOscillator(); v.frequency.value = 9 + Math.random()*6; const vg = c.createGain(); vg.gain.value = f*.025;
+    v.connect(vg); vg.connect(x.frequency);
+    const xg = c.createGain(); xg.gain.value = .16; x.connect(xg); xg.connect(ws);
+    x.start(t); x.stop(t + 1.5); v.start(t); v.stop(t + 1.5);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  The score.                                                         */
+/* ------------------------------------------------------------------ */
+const SCARE0 = 59.2, SCARE1 = 60.1, END0 = 62.6;
+const CAM = [[0, 0, -.11, 1.9], [6, 0, -.11, 1.9], [20, 0, -.05, 1.75], [30, -.01, .235, 2.5], [52, -.01, .25, 2.75], [58, -.01, .278, 3.8]];
+const BASE_CUES = [
+  [1.5, 6.0, 'Goya painted this on the wall of the room where he ate.'],
+  [8.0, 12.5, 'Saturn had been told that one of his children would replace him.'],
+  [13.5, 18.5, 'So he never let any of them grow up.'],
+  [23.0, 27.5, 'Look at his eyes.'],
+  [28.5, 34.0, 'He isn’t hungry. He’s terrified.'],
+  [35.0, 39.7, 'Something that afraid of being replaced will do anything.'],
+  [47.5, 51.6, 'Some people call him Father Time.'],
+  [52.2, 57.6, 'Everything he makes, he eats.'],
+  [66.0, 71.0, 'He’s finished with that one.'],
+  [72.5, 78.0, 'He is still afraid.'],
+];
+let CUES = BASE_CUES.slice(), COUNT_AT = 80;
+const EVENTS = [
+  [0, () => { to(A.master, .95, .05); to(A.droneG, .3, 2.5); to(A.roomG, .06, 2); to(A.glassG, 0, .1); }],
+  [40, () => { to(A.droneG, 0, .02); to(A.roomG, .015, .05); }],
+  [41, () => { to(A.glassG, .01, 5); }],
+  [58, () => { to(A.droneG, 0, .01); to(A.roomG, 0, .01); to(A.glassG, 0, .01); }],
+  [SCARE0, () => scareSound()],
+  [SCARE1 - .12, () => chewSound(2.2)],
+  [SCARE1 + .15, () => to(A.master, 0, .03)],
+  [END0 - .3, () => { to(A.master, .95, .1); to(A.droneG, .16, 5); to(A.roomG, .04, 4); }],
+];
+const fired = new Set();
+
+const ease = x => { x = Math.min(1, Math.max(0, x)); return x*x*(3 - 2*x); };
+const ramp = (t, a, b) => ease((t - a)/(b - a));
+const lerp = (a, b, k) => a + (b - a)*k;
+function camAt(t){
+  if (t <= CAM[0][0]) return CAM[0].slice(1);
+  for (let i = 0; i < CAM.length - 1; i++){
+    const a = CAM[i], b = CAM[i+1];
+    if (t <= b[0]){ const k = ease((t - a[0])/(b[0] - a[0])); return [lerp(a[1], b[1], k), lerp(a[2], b[2], k), lerp(a[3], b[3], k)]; }
+  }
+  return CAM[CAM.length - 1].slice(1);
+}
+const fmt = s => { s = Math.floor(s); return Math.floor(s/60) + ':' + String(s%60).padStart(2, '0'); };
+
+let mode = 'idle', T = 0, freeze = false;
+const born = performance.now();
+let chewPhase = 0, chewPeriod = 1.1, bite = 0, lastBeat = 0, nextBreath = 0;
+let look = [0, 0], lookGoal = [0, 0], nextSaccade = 0, wander = [-.62, .22];
+let mouse = null, mouseAt = -1e9, hiddenAt = 0;
+let shownCue = null;
+let frames = 0, frameAcc = 0;
+
+if (qs.has('t')) { mode = 'run'; T = parseFloat(qs.get('t')) || 0; freeze = qs.has('freeze'); gate.hidden = true; }
+
+function setPointer(x, y){ mouse = [x, y]; mouseAt = performance.now(); }
+addEventListener('pointermove', e => setPointer(e.clientX, e.clientY));
+addEventListener('pointerdown', e => setPointer(e.clientX, e.clientY));
+
+function lookAtPointer(cam, z){
+  const r = canvas.getBoundingClientRect();
+  const wx = (mouse[0] - r.left - r.width/2)/r.height/z + cam[0];
+  const wy = -(mouse[1] - r.top - r.height/2)/r.height/z + cam[1];
+  const vx = wx + .009, vy = wy - .286, L = Math.hypot(vx, vy) || 1e-6, m = Math.min(1, L*9);
+  return [vx/L*m, vy/L*m];
+}
+
+function begin(){
+  const a = audioInit();
+  if (a && a.ctx.state === 'suspended') a.ctx.resume();
+  const fs = document.documentElement.requestFullscreen;
+  if (fs) { try { const p = fs.call(document.documentElement); if (p && p.catch) p.catch(() => {}); } catch (e) {} }
+  const h = new Date().getHours();
+  CUES = BASE_CUES.slice(); COUNT_AT = 80;
+  if (h >= 22 || h < 5){
+    const when = new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    CUES.push([79.5, 85.5, 'It’s ' + when + '. Everyone else is asleep.']); COUNT_AT = 87;
+  }
+  fired.clear(); T = 0; chewPhase = 0; bite = 0; lastBeat = 0; nextBreath = 0; mode = 'run';
+  againBtn.hidden = true; countEl.style.opacity = 0;
+  gate.classList.add('leaving');
+  setTimeout(() => { gate.hidden = true; }, 1700);
+}
+document.getElementById('begin').addEventListener('click', begin);
+againBtn.addEventListener('click', begin);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden){ hiddenAt = performance.now(); document.title = 'he’s still eating'; }
+  else {
+    document.title = 'Saturno';
+    const gone = (performance.now() - hiddenAt)/1000;
+    if (mode === 'run' && T > END0 + 12 && gone > 3) CUES.push([T + .3, T + 6.5, 'He kept eating while you were gone. ' + fmt(gone) + '.']);
+  }
+});
+
+function frame(nowMs){
+  const now = nowMs/1000;
+  const dt = Math.min(.1, (nowMs - (frame.last || nowMs))/1000); frame.last = nowMs;
+  if (mode === 'run' && !freeze) T += dt;
+  const t = T;
+
+  // adaptive resolution: keep it smooth on weaker GPUs
+  frames++; frameAcc += dt;
+  if (frameAcc > 2){ if (frameAcc/frames > .028 && budget > 260000){ budget *= .72; resize(); } frames = 0; frameAcc = 0; }
+
+  let cam, light = 0, fade = 1, chewAmp = 0, jawBase = 0, pupil = 1, eyeOpen = 1, eyeGlow = 0, son = 1, reach = 0, blood = 0, scare = 0, lookMode = 'wander';
+  if (mode === 'idle'){
+    cam = [-.01, .27, 2.3]; eyeGlow = .55; lookMode = 'pointer';
+  } else if (t < 58){
+    cam = camAt(t);
+    light = ramp(t, 6, 17)*(1 - .45*ramp(t, 52, 57.6));
+    eyeGlow = .55*(1 - ramp(t, 0, 1.4));
+    chewAmp = (t > 3 && t < 40) ? 1 : 0;
+    jawBase = .65*ramp(t, 52.5, 57.8);
+    blood = ramp(t, 6, 56);
+    if (t > 41){ lookMode = 'stare'; const k = ramp(t, 41, 47); pupil = lerp(1, .5, k); eyeGlow = .14*k; }
+  } else if (t < SCARE0){
+    cam = camAt(58); fade = 0; jawBase = .65;
+  } else if (t < SCARE1){
+    const k = (t - SCARE0)/(SCARE1 - SCARE0);
+    cam = [-.01, .215, lerp(2.2, 3.3, ease(k))];
+    if (!reduceMotion){ const a = .007*(1 - .4*k); cam[0] += (Math.random() - .5)*a; cam[1] += (Math.random() - .5)*a; }
+    light = 1.5; son = 0; reach = 1; scare = 1; pupil = .4; eyeOpen = 1.1; blood = 1; lookMode = 'stare';
+    jawBase = t > SCARE1 - .13 ? lerp(1.75, 0, ease((t - (SCARE1 - .13))/.09)) : 1.75;
+  } else if (t < END0){
+    cam = [0, .06, 1.15]; fade = 0; son = 0; reach = 1;
+  } else {
+    const te = t - END0;
+    cam = [0, .06, lerp(1.15, 1.7, Math.min(1, te/180))];
+    light = .95*ramp(te, 0, 7); son = 0; reach = 1; blood = 1; pupil = .6; eyeGlow = .18;
+    jawBase = .14 + .04*Math.sin(te*.6);
+    lookMode = 'pointer';
+    if (te > 20) againBtn.hidden = false;
+  }
+
+  const fit = Math.min(1, (cssW/cssH)/.66);
+  const z = cam[2]*fit;
+
+  // chewing
+  if (chewAmp > 0){
+    chewPhase += dt/chewPeriod;
+    if (chewPhase >= 1){ chewPhase -= 1; chewPeriod = .85 + Math.random()*.5; bite = 1; chewSound(1); }
+  } else chewPhase = 0;
+  bite = Math.max(0, bite - dt*7);
+  const jaw = jawBase + chewAmp*Math.pow(Math.sin(Math.PI*chewPhase), 1.4)*.55;
+
+  // where he is looking
+  if (lookMode === 'pointer'){
+    if (mouse && nowMs - mouseAt < 6000) lookGoal = lookAtPointer(cam, z);
+    else lookGoal = [.04*Math.sin(now*.7), .03*Math.sin(now*.53)];
+  } else if (lookMode === 'stare'){
+    const k = mode === 'run' && t < 47 ? ramp(t, 41, 47) : 1;
+    lookGoal = [lerp(wander[0], 0, k) + .015*Math.sin(now*9), lerp(wander[1], 0, k) + .015*Math.sin(now*7.3)];
+  } else {
+    if (now > nextSaccade){ nextSaccade = now + .7 + Math.random()*1.8; wander = [-.62 + (Math.random() - .5)*.3, .22 + (Math.random() - .5)*.22]; }
+    lookGoal = wander;
+  }
+  const lk = 1 - Math.exp(-dt*22);
+  look[0] += (lookGoal[0] - look[0])*lk; look[1] += (lookGoal[1] - look[1])*lk;
+
+  // heartbeat during the stare; breathing in the quiet
+  if (mode === 'run' && t > 41.5 && t < 58){
+    const bpm = lerp(58, 104, ramp(t, 41.5, 57.8));
+    if (t - lastBeat > 60/bpm){ lastBeat = t; heartbeat(lerp(.3, .85, ramp(t, 41.5, 57.8))); }
+  }
+  const breathing = mode === 'run' && ((t > 43 && t < 56) || t > END0 + 3);
+  if (breathing && t > nextBreath){ nextBreath = t + 4.8 + Math.random()*1.2; breathe(t > END0 ? .1 : .16); }
+
+  if (mode === 'run' && A && !freeze) for (const ev of EVENTS) if (!fired.has(ev) && t >= ev[0]){ fired.add(ev); ev[1](); }
+
+  // words
+  if (mode === 'run'){
+    let cue = null, op = 0;
+    for (const c of CUES) if (t >= c[0] && t < c[1]){ cue = c; op = ramp(t, c[0], c[0] + 1.1)*(1 - ramp(t, c[1] - 1.1, c[1])); }
+    if (cue !== shownCue){ shownCue = cue; lineEl.textContent = cue ? cue[2] : ''; }
+    lineEl.style.opacity = op.toFixed(3);
+    if (t > COUNT_AT){
+      const txt = 'He has eaten ' + fmt((nowMs - born)/1000) + ' of your life.';
+      if (countEl.textContent !== txt) countEl.textContent = txt;
+      countEl.style.opacity = (ramp(t, COUNT_AT, COUNT_AT + 2)*.9).toFixed(3);
+    }
+  }
+
+  gl.uniform2f(U.uRes, canvas.width, canvas.height);
+  gl.uniform1f(U.uTime, now);
+  gl.uniform1f(U.uFade, fade);
+  gl.uniform3f(U.uCam, cam[0], cam[1], z);
+  gl.uniform1f(U.uLight, light);
+  gl.uniform1f(U.uJaw, jaw);
+  gl.uniform1f(U.uPupil, pupil);
+  gl.uniform1f(U.uEyeOpen, eyeOpen);
+  gl.uniform1f(U.uEyeGlow, eyeGlow);
+  gl.uniform1f(U.uSon, son);
+  gl.uniform1f(U.uReach, reach);
+  gl.uniform1f(U.uBlood, blood);
+  gl.uniform1f(U.uScare, scare);
+  gl.uniform1f(U.uBreath, Math.sin(now*2*Math.PI/4.8));
+  gl.uniform1f(U.uBite, bite);
+  gl.uniform2f(U.uLook, look[0], look[1]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
